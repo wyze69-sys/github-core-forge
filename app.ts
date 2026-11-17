@@ -28,7 +28,7 @@ export function createApp(): Server {
   const store = new Store();
   const token = process.env.MAKEFUN_SHOP_TOKEN ?? '';
 
-  return createServer((req: IncomingMessage, res: ServerResponse) => {
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void handle(store, token, req, res).catch(() => {
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': JSON_TYPE });
@@ -38,6 +38,12 @@ export function createApp(): Server {
       }
     });
   });
+  // Git clients make several small sequential requests per clone on one
+  // connection: keep the socket alive across them and send replies at once
+  // rather than letting Nagle's algorithm batch them into delayed segments.
+  server.keepAliveTimeout = 30_000;
+  server.on('connection', (socket) => socket.setNoDelay(true));
+  return server;
 }
 
 async function handle(store: Store, token: string, req: IncomingMessage, res: ServerResponse): Promise<void> {

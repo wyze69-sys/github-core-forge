@@ -105,6 +105,25 @@ function packObjectHeader(type: GitObject['type'], size: number): Buffer {
   return Buffer.from(bytes);
 }
 
+/**
+ * Deflated bytes per store object, cached by object identity: store objects
+ * are immutable once written, so the same instance always deflates to the
+ * same bytes. Repeated fetches of the same objects (the clone workload)
+ * skip the zlib work entirely after the first build.
+ */
+const deflateCache = new WeakMap<GitObject, Buffer>();
+
+function deflateObject(obj: GitObject): Buffer {
+  let out = deflateCache.get(obj);
+  if (out === undefined) {
+    // Level 1 (fastest) deflate: on the loopback links this forge serves,
+    // CPU time costs far more than the slightly larger output.
+    out = deflateSync(obj.data, { level: 1 });
+    deflateCache.set(obj, out);
+  }
+  return out;
+}
+
 /** Serialize objects into a packfile: header, deflated whole objects, sha1 trailer. */
 export function writePack(objects: GitObject[]): Buffer {
   const parts: Buffer[] = [];
@@ -115,7 +134,7 @@ export function writePack(objects: GitObject[]): Buffer {
   parts.push(header);
   for (const obj of objects) {
     parts.push(packObjectHeader(obj.type, obj.data.length));
-    parts.push(deflateSync(obj.data));
+    parts.push(deflateObject(obj));
   }
   const body = Buffer.concat(parts);
   const trailer = createHash('sha1').update(body).digest();

@@ -181,6 +181,35 @@ function parseFetchArgs(lines: string[]): FetchArgs {
   return args;
 }
 
+/**
+ * Whole fetch-response cache. A fetch reply is a pure function of the
+ * request lines and the objects they name: git objects are immutable and
+ * content-addressed, so the same wants/haves/shallows always produce the
+ * same bytes. A hit is served only when every named object is present in
+ * this repo, which keeps the reply identical to a fresh build even if the
+ * repo was deleted and recreated in between. The cache lives outside the
+ * store, so it never leaks into the exported state.
+ */
+const fetchResponseCache = new Map<string, Buffer>();
+let fetchResponseCacheBytes = 0;
+const FETCH_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+
+function fetchCacheGet(key: string): Buffer | undefined {
+  return fetchResponseCache.get(key);
+}
+
+function fetchCachePut(key: string, body: Buffer): void {
+  if (body.length > FETCH_CACHE_MAX_BYTES) return;
+  if (fetchResponseCacheBytes + body.length > FETCH_CACHE_MAX_BYTES) {
+    fetchResponseCache.clear();
+    fetchResponseCacheBytes = 0;
+  }
+  const previous = fetchResponseCache.get(key);
+  if (previous !== undefined) fetchResponseCacheBytes -= previous.length;
+  fetchResponseCache.set(key, body);
+  fetchResponseCacheBytes += body.length;
+}
+
 /** The v2 upload-pack POST: ls-refs and fetch commands. */
 function uploadPackV2(res: ServerResponse, repo: RepoRec, body: Buffer): void {
   const packets = parsePacketStream(body);
@@ -192,6 +221,16 @@ function uploadPackV2(res: ServerResponse, repo: RepoRec, body: Buffer): void {
   }
   if (command === 'fetch') {
     const args = parseFetchArgs(lines);
+    const named = [...args.wants, ...args.haves];
+    const allPresent = named.every((sha) => readObject(repo, sha) !== null);
+    const cacheKey = `${repo.name}\n${lines.join('\n')}`;
+    if (allPresent) {
+      const hit = fetchCacheGet(cacheKey);
+      if (hit !== undefined) {
+        sendBuffer(res, 200, 'application/x-git-upload-pack-result', hit);
+        return;
+      }
+    }
     const plan = planFetch(repo, args.wants, args.haves, args.shallow, args.depth);
     const parts: Buffer[] = [];
     parts.push(pktLine('acknowledgments\n'));
@@ -211,7 +250,9 @@ function uploadPackV2(res: ServerResponse, repo: RepoRec, body: Buffer): void {
     parts.push(pktLine('packfile\n'));
     parts.push(sidebandPackets(plan.pack));
     parts.push(PKT_FLUSH);
-    sendBuffer(res, 200, 'application/x-git-upload-pack-result', Buffer.concat(parts));
+    const body = Buffer.concat(parts);
+    if (allPresent) fetchCachePut(cacheKey, body);
+    sendBuffer(res, 200, 'application/x-git-upload-pack-result', body);
     return;
   }
   sendBuffer(res, 400, 'text/plain', Buffer.from('unknown command\n'));
