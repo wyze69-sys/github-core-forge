@@ -10,7 +10,8 @@ export type ObjectType = GitObject['type'];
 /** The git object id: sha1 of "<type> <len>\0" followed by the payload. */
 export function hashObject(type: ObjectType, data: Buffer): string {
   const header = Buffer.from(`${type} ${data.length}\0`, 'utf8');
-  return createHash('sha1').update(Buffer.concat([header, data])).digest('hex');
+  // Two updates hash the same byte stream as header||data without copying it.
+  return createHash('sha1').update(header).update(data).digest('hex');
 }
 
 export function writeObject(repo: RepoRec, type: ObjectType, data: Buffer): string {

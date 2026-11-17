@@ -75,16 +75,27 @@ export class Store {
   viewerLogin: string | null = null;
   private repoIdSeq = 5000;
   private tickSeq = 0;
+  private isoCacheTick = -1;
+  private isoCacheText = '';
+
+  /** The ISO string for a tick: a pure function of the tick, so it is memoized. */
+  private isoFor(tick: number): string {
+    if (tick !== this.isoCacheTick) {
+      this.isoCacheTick = tick;
+      this.isoCacheText = new Date(CLOCK_BASE_MS + tick * 1000).toISOString().replace('.000Z', 'Z');
+    }
+    return this.isoCacheText;
+  }
 
   /** Next logical timestamp as an ISO string; every call advances the clock by one second. */
   nowIso(): string {
     this.tickSeq += 1;
-    return new Date(CLOCK_BASE_MS + this.tickSeq * 1000).toISOString().replace('.000Z', 'Z');
+    return this.isoFor(this.tickSeq);
   }
 
   /** A timestamp for the current tick without advancing (stable within one request). */
   peekIso(): string {
-    return new Date(CLOCK_BASE_MS + Math.max(1, this.tickSeq) * 1000).toISOString().replace('.000Z', 'Z');
+    return this.isoFor(Math.max(1, this.tickSeq));
   }
 
   /** The current logical tick as unix seconds, for git ident lines. */

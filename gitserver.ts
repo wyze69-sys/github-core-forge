@@ -64,23 +64,21 @@ function v0Advertisement(repo: RepoRec, service: 'git-upload-pack' | 'git-receiv
   return Buffer.concat(parts);
 }
 
-/** The v2 capability advertisement for upload-pack. */
-function v2Advertisement(): Buffer {
-  return Buffer.concat([
-    pktLine('version 2\n'),
-    pktLine(`agent=${AGENT}\n`),
-    pktLine('ls-refs=unborn\n'),
-    pktLine('fetch=filter shallow\n'),
-    pktLine('object-format=sha1\n'),
-    PKT_FLUSH,
-  ]);
-}
+/** The v2 capability advertisement for upload-pack: identical for every repo and every state, so it is built once. */
+const V2_ADVERTISEMENT: Buffer = Buffer.concat([
+  pktLine('version 2\n'),
+  pktLine(`agent=${AGENT}\n`),
+  pktLine('ls-refs=unborn\n'),
+  pktLine('fetch=filter shallow\n'),
+  pktLine('object-format=sha1\n'),
+  PKT_FLUSH,
+]);
 
 function infoRefs(store: Store, req: IncomingMessage, res: ServerResponse, repo: RepoRec, url: URL): void {
   const service = url.searchParams.get('service');
   if (service === 'git-upload-pack') {
     const wantsV2 = (req.headers['git-protocol'] ?? '').includes('version=2');
-    sendBuffer(res, 200, 'application/x-git-upload-pack-advertisement', wantsV2 ? v2Advertisement() : v0Advertisement(repo, 'git-upload-pack'));
+    sendBuffer(res, 200, 'application/x-git-upload-pack-advertisement', wantsV2 ? V2_ADVERTISEMENT : v0Advertisement(repo, 'git-upload-pack'));
     return;
   }
   if (service === 'git-receive-pack') {
@@ -153,7 +151,9 @@ function planFetch(
 /** Frame pack bytes as sideband-64k band-1 pkt-lines. */
 function sidebandPackets(pack: Buffer): Buffer {
   const parts: Buffer[] = [];
-  const CHUNK = 32768;
+  // Largest legal band payload: a pkt-line is at most 65520 bytes including
+  // its 4-byte length prefix and the 1-byte band marker.
+  const CHUNK = 65515;
   for (let i = 0; i < pack.length; i += CHUNK) {
     parts.push(pktLine(Buffer.concat([Buffer.from([1]), pack.subarray(i, i + CHUNK)])));
   }
